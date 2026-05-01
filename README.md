@@ -48,12 +48,19 @@ CalSync is a Chrome Extension that helps you instantly convert tables from Notio
 
 ## 📂 Project Structure
 CalSync/
+
 │── manifest.json
+
 │── popup.html
+
 │── popup.js
+
 │── popup.css
+
 │── background.js
+
 │── contentScript.js
+
 │── assets/
 
 
