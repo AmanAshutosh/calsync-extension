@@ -31,8 +31,8 @@
   };
 
   // ── Page-level state ───────────────────────────────────────────────────
-  // ONE button per page, updated as more events are found (e.g. as user scrolls)
-  let _pageBtn = null;
+  let _pageBtn  = null;   // single button for the whole page
+  let _scanning = false;  // re-entry lock so MutationObserver can't overlap
   const _eventMap = new Map(); // title|date → event object
 
   function accumulateEvents(events) {
@@ -49,15 +49,6 @@
   // ── Helpers ────────────────────────────────────────────────────────────
   function eventKey(ev) {
     return `${(ev.title || "").toLowerCase().trim()}|${ev.date || ""}`;
-  }
-
-  function deduplicateEvents(events) {
-    const seen = new Map();
-    for (const ev of events) {
-      const k = eventKey(ev);
-      if (!seen.has(k)) seen.set(k, ev);
-    }
-    return [...seen.values()];
   }
 
   function hasDatePattern(text) {
@@ -318,15 +309,24 @@
       }
     }
 
-    return deduplicateEvents(events);
+    // Deduplicate within text-scan results before returning
+    const seen = new Map();
+    for (const ev of events) {
+      const k = eventKey(ev);
+      if (!seen.has(k)) seen.set(k, ev);
+    }
+    return [...seen.values()];
   }
 
   // ── Single page-level floating button ─────────────────────────────────
-  // Only ONE button lives on the page. It is fixed bottom-right and
-  // shows a count badge that updates as more events are found while scrolling.
+  // Only ONE button lives on the page — fixed bottom-right corner.
+  // Count badge updates live as Notion scrolls and reveals more rows.
   function ensurePageButton() {
     const events = getAllEvents();
     if (!events.length) return;
+
+    // Guard: Notion may have removed our button during a full re-render
+    if (_pageBtn && !_pageBtn.isConnected) _pageBtn = null;
 
     if (_pageBtn) {
       const badge = _pageBtn.querySelector(".calsync-count");
@@ -366,22 +366,31 @@
 
   // ── Main Scan ──────────────────────────────────────────────────────────
   function scan() {
-    const tables = findTables();
-    let fresh = [];
-    tables.forEach(t => fresh.push(...parseTable(t)));
+    // Re-entry guard: MutationObserver fires when we append the button,
+    // which would recursively trigger another scan before this one ends.
+    if (_scanning) return { events: getAllEvents(), source: detectSource() };
+    _scanning = true;
 
-    // Pass 3: text fallback only when no structured events at all
-    if (!fresh.length && !tables.length) {
-      console.log("[CalSync] No tables — trying text scan");
-      fresh = scanPageText();
+    try {
+      const tables = findTables();
+      let fresh = [];
+      tables.forEach(t => fresh.push(...parseTable(t)));
+
+      // Pass 3: full-page text fallback when structured parsing yields nothing
+      if (!fresh.length && !tables.length) {
+        console.log("[CalSync] No tables — trying text scan");
+        fresh = scanPageText();
+      }
+
+      const changed = accumulateEvents(fresh);
+      if (changed) ensurePageButton();
+
+      const all = getAllEvents();
+      console.log(`[CalSync] Scan: ${tables.length} tables, ${fresh.length} new, ${all.length} total`);
+      return { events: all, source: detectSource() };
+    } finally {
+      _scanning = false;
     }
-
-    const changed = accumulateEvents(fresh);
-    if (changed) ensurePageButton();
-
-    const all = getAllEvents();
-    console.log(`[CalSync] Scan: ${tables.length} tables, ${fresh.length} new, ${all.length} total`);
-    return { events: all, source: detectSource() };
   }
 
   // ── Message Listener ───────────────────────────────────────────────────

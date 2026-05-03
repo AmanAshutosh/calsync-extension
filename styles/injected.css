@@ -32,6 +32,16 @@
   flex-shrink: 0;
 }
 
+.calsync-float-btn .calsync-count {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.6;
+}
+
 .calsync-float-btn:hover {
   transform: translateY(-2px) scale(1.02);
   box-shadow:

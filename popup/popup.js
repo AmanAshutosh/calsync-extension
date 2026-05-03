@@ -9,6 +9,8 @@ const state = {
   selected: new Set(),
   authConnected: false,
   authError: null,
+  importError: null,
+  _pendingImport: false,
   source: null,
   importedCount: 0,
 };
@@ -120,15 +122,30 @@ function buildEmpty() {
 // ── Error ─────────────────────────────────────────────────────────────────
 function buildError() {
   const wrap = el("div", { class: "state-error" });
+
+  const msg = state.importError
+    ? state.importError
+    : "Import failed. Make sure you are connected and the events have valid dates.";
+
   wrap.innerHTML = `
     <div class="state-icon">
       <svg width="22" height="22" fill="none" stroke="var(--danger)" stroke-width="1.5" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
     </div>
-    <p class="state-title">Parse error</p>
-    <p class="state-subtitle">Some rows couldn't be parsed. Problematic rows are highlighted.</p>
+    <p class="state-title">Import failed</p>
+    <p class="state-subtitle">${msg}</p>
   `;
+
+  const retry = el("button", { class: "source-rescan", style: "margin-top:12px" });
+  retry.textContent = "← Try again";
+  retry.addEventListener("click", () => {
+    state.importError = null;
+    state.phase = "ready";
+    render();
+  });
+  wrap.appendChild(retry);
+
   return wrap;
 }
 
@@ -351,40 +368,47 @@ async function handleAuth() {
   chrome.runtime.sendMessage({ type: "AUTH_START" }, (res) => {
     if (res?.success) {
       state.authConnected = true;
-      // If the popup shows "empty" or "loading", kick off a fresh scan now
-      if (state.phase === "empty" || state.phase === "loading") scanPage();
-      else render();
+      if (state._pendingImport) {
+        // User clicked "Add to Calendar" before connecting — resume it now
+        handleImport();
+      } else if (state.phase === "empty" || state.phase === "loading") {
+        scanPage();
+      } else {
+        render();
+      }
     } else {
       const label = AUTH_ERROR_LABELS[res?.error] || `Auth failed: ${res?.error || "unknown error"}`;
       state.authError = label;
-      render(); // re-render so buildHeader shows the error
+      render();
     }
   });
 }
 
 async function handleImport() {
   if (!state.authConnected) {
-    await handleAuth();
+    // Flag so handleAuth knows to resume import after connecting
+    state._pendingImport = true;
+    handleAuth();
     return;
   }
+  state._pendingImport = false;
 
   const btn = root.querySelector(".btn-primary");
-  btn.classList.add("loading");
+  if (btn) btn.classList.add("loading");
 
   const toImport = [...state.selected].map((i) => state.events[i]);
 
-  chrome.runtime.sendMessage(
-    { type: "IMPORT_EVENTS", events: toImport },
-    (res) => {
-      if (res?.success) {
-        state.importedCount = res.count;
-        state.phase = "success";
-      } else {
-        state.phase = "error";
-      }
-      render();
-    },
-  );
+  chrome.runtime.sendMessage({ type: "IMPORT_EVENTS", events: toImport }, (res) => {
+    if (res?.success) {
+      state.importedCount = res.count;
+      state.importError   = null;
+      state.phase = "success";
+    } else {
+      state.importError = res?.error || "Unknown error — check the console.";
+      state.phase = "error";
+    }
+    render();
+  });
 }
 
 async function handlePaste() {
@@ -404,26 +428,34 @@ async function handlePaste() {
   } catch (_) {}
 }
 
-async function scanPage() {
+async function scanPage(retryOnEmpty = true) {
   state.phase = "loading";
   render();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  chrome.tabs.sendMessage(tab.id, { type: "SCAN" }, (res) => {
+
+  chrome.tabs.sendMessage(tab.id, { type: "SCAN" }, async (res) => {
     if (chrome.runtime.lastError || !res) {
+      // Content script not reachable (e.g. chrome:// page or script not yet injected)
       state.phase = "empty";
       render();
       return;
     }
+
     if (res.events?.length) {
       state.events = res.events;
       state.selected = new Set(res.events.map((_, i) => i));
       state.phase = "ready";
       state.source = res.source;
+      render();
+    } else if (retryOnEmpty) {
+      // SPAs like Notion render lazily — wait 1.5 s and try once more
+      await new Promise(r => setTimeout(r, 1500));
+      scanPage(false);
     } else {
       state.phase = "empty";
+      render();
     }
-    render();
   });
 }
 
@@ -442,11 +474,10 @@ function el(tag, attrs = {}) {
 function formatDate(dateStr) {
   if (!dateStr) return "";
   try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
+    // Parse as local date to avoid UTC-offset shifting the day (e.g. "2026-06-06" → Jun 5)
+    const [y, mo, d] = dateStr.split("-").map(Number);
+    return new Date(y, mo - 1, d).toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
     });
   } catch (_) {
     return dateStr;

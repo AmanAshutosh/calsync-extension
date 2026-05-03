@@ -109,9 +109,12 @@ function buildEventBody(ev) {
       };
     }
   } else {
-    // All-day event
+    // All-day event: Google Calendar requires end = exclusive next day
+    const [y, mo, d] = dateStr.split("-").map(Number);
+    const endDt = new Date(y, mo - 1, d + 1);
+    const endStr = `${endDt.getFullYear()}-${String(endDt.getMonth() + 1).padStart(2, "0")}-${String(endDt.getDate()).padStart(2, "0")}`;
     start = { date: dateStr };
-    end = { date: dateStr };
+    end   = { date: endStr };
   }
 
   const body = {
