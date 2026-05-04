@@ -104,5 +104,5 @@ Focused on building useful, performance-first web tools.
 
 If you find this project useful:
 
-Star the repo ⭐
+Star the repo ⭐ and support
 Share with others 🚀
